@@ -1,0 +1,679 @@
+// Helpdesk + Implementaciones + Inventario + IA
+// Postgres con pgvector para RAG
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector, pgcrypto]
+}
+
+// =======================================================================
+// Auth.js v5 + Usuarios
+// =======================================================================
+
+enum UserRole {
+  ADMIN
+  AGENT
+  CLIENT
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  password      String? // hash bcrypt
+  role          UserRole  @default(AGENT)
+
+  // Activo / desactivado (no se borra para preservar histórico de tickets)
+  active Boolean @default(true)
+
+  // Versión del token: incrementarla invalida todas las sesiones JWT existentes
+  tokenVersion Int @default(0)
+
+  // 2FA TOTP
+  twoFactorSecret     String? // cifrado con AES-256-GCM
+  twoFactorEnabled    Boolean @default(false)
+  twoFactorRecovery   String? @db.Text // JSON array de recovery codes hasheados
+
+  // Si es CLIENT, vinculado a un customer
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  accounts Account[]
+  sessions Session[]
+  passwordResets PasswordResetToken[]
+  notifications  Notification[]
+
+  createdTickets     Ticket[]            @relation("TicketCreatedBy")
+  assignedTickets    Ticket[]            @relation("TicketAssignedTo")
+  comments           TicketComment[]
+  attachments        TicketAttachment[]
+  aiConversations    AiConversation[]
+  activityLogs       ActivityLog[]
+  authoredKbArticles KbArticle[]
+  integrationsUpdated IntegrationSetting[]
+  recurringTickets   RecurringTicket[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([customerId])
+  @@index([role])
+  @@index([active])
+}
+
+model RecurringTicket {
+  id          String   @id @default(cuid())
+  name        String // nombre interno de la plantilla
+  title       String // título del ticket generado
+  description String   @db.Text
+  priority    TicketPriority @default(MEDIUM)
+  customerId  String
+  systemId    String?
+  assignedToId String?
+  tags        String[]
+
+  intervalDays Int      // cada cuántos días se genera
+  nextRunAt    DateTime // próxima ejecución
+  lastRunAt    DateTime?
+  active       Boolean  @default(true)
+
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  system     System?  @relation(fields: [systemId], references: [id], onDelete: SetNull)
+  assignedTo User?    @relation(fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([active, nextRunAt])
+  @@index([customerId])
+}
+
+enum NotificationKind {
+  TICKET_CREATED
+  TICKET_COMMENTED
+  TICKET_STATUS_CHANGED
+  TICKET_ASSIGNED
+  SYSTEM
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  kind      NotificationKind
+  title     String
+  body      String?          @db.Text
+  url       String?
+  readAt    DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, readAt])
+  @@index([createdAt])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique // hash SHA-256 del token
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Account {
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([provider, providerAccountId])
+}
+
+model Session {
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@id([identifier, token])
+}
+
+// =======================================================================
+// Clientes
+// =======================================================================
+
+enum CustomerStatus {
+  ACTIVE
+  INACTIVE
+  PROSPECT
+}
+
+model Customer {
+  id      String         @id @default(cuid())
+  name    String
+  slug    String         @unique
+  email   String?
+  phone   String?
+  website String?
+  address String?
+  notes   String?
+  status  CustomerStatus @default(ACTIVE)
+
+  contacts          Contact[]
+  systems           System[]
+  servers           Server[]
+  tickets           Ticket[]
+  users             User[]
+  kbArticles        KbArticle[]
+  aiConversations   AiConversation[]
+  recurringTickets  RecurringTicket[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+}
+
+model Contact {
+  id         String  @id @default(cuid())
+  customerId String
+  name       String
+  email      String?
+  phone      String?
+  role       String?
+  isPrimary  Boolean @default(false)
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([customerId])
+}
+
+// =======================================================================
+// Productos (catálogo) y Sistemas (instancia por cliente)
+// =======================================================================
+
+model Product {
+  id          String  @id @default(cuid())
+  name        String
+  slug        String  @unique
+  description String?
+  version     String?
+
+  systems    System[]
+  kbArticles KbArticle[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum SystemEnvironment {
+  PRODUCTION
+  STAGING
+  DEVELOPMENT
+}
+
+enum SystemStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+model System {
+  id          String            @id @default(cuid())
+  customerId  String
+  productId   String
+  name        String
+  environment SystemEnvironment @default(PRODUCTION)
+  status      SystemStatus      @default(ACTIVE)
+  url         String?
+  notes       String?
+  installedAt DateTime?
+
+  customer       Customer       @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  product        Product        @relation(fields: [productId], references: [id])
+  serverSystems  ServerSystem[]
+  containers     Container[]
+  tickets        Ticket[]
+  kbArticles     KbArticle[]
+  recurringTickets RecurringTicket[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([customerId])
+  @@index([productId])
+}
+
+// =======================================================================
+// Servidores y contenedores
+// =======================================================================
+
+enum ServerStatus {
+  ONLINE
+  OFFLINE
+  DEGRADED
+  UNKNOWN
+}
+
+model Server {
+  id          String       @id @default(cuid())
+  customerId  String
+  name        String
+  hostname    String?
+  ipAddress   String?
+  location    String?
+  provider    String? // AWS, DO, Hetzner, OnPrem...
+  os          String?
+  cpuCores    Int?
+  memoryGb    Float?
+  diskGb      Float?
+  status      ServerStatus @default(UNKNOWN)
+  lastSeenAt  DateTime?
+  agentToken  String       @unique @default(cuid())
+  notes       String?
+
+  customer       Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  serverSystems  ServerSystem[]
+  containers     Container[]
+  heartbeats     ServerHeartbeat[]
+  tickets        Ticket[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([customerId])
+  @@index([status])
+}
+
+model ServerSystem {
+  serverId String
+  systemId String
+  role     String? // web, db, worker, cache, etc.
+
+  server Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  system System @relation(fields: [systemId], references: [id], onDelete: Cascade)
+
+  @@id([serverId, systemId])
+  @@index([systemId])
+}
+
+enum ContainerStatus {
+  RUNNING
+  PAUSED
+  EXITED
+  RESTARTING
+  CREATED
+  DEAD
+  UNKNOWN
+}
+
+model Container {
+  id          String          @id @default(cuid())
+  serverId    String
+  systemId    String?
+  containerId String? // Docker container ID (largo)
+  name        String
+  image       String
+  imageTag    String?
+  status      ContainerStatus @default(UNKNOWN)
+  ports       Json?
+  labels      Json?
+  env         Json?
+  cpuPercent  Float?
+  memoryMb    Float?
+  startedAt   DateTime?
+  lastSeenAt  DateTime?
+  notes       String?
+
+  server Server  @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  system System? @relation(fields: [systemId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([serverId, name])
+  @@index([serverId])
+  @@index([systemId])
+  @@index([status])
+}
+
+model ServerHeartbeat {
+  id             String   @id @default(cuid())
+  serverId       String
+  reportedAt     DateTime @default(now())
+  cpuPercent     Float?
+  memoryPercent  Float?
+  diskPercent    Float?
+  loadAvg1       Float?
+  loadAvg5       Float?
+  loadAvg15      Float?
+  uptimeSeconds  Int?
+  dockerVersion  String?
+  raw            Json?
+
+  server Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  @@index([serverId, reportedAt])
+}
+
+// =======================================================================
+// Tickets (soporte + implementación)
+// =======================================================================
+
+enum TicketType {
+  SUPPORT
+  IMPLEMENTATION
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING_CLIENT
+  RESOLVED
+  CLOSED
+  CANCELLED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model Ticket {
+  id          String         @id @default(cuid())
+  code        String         @unique // TKT-0001, IMP-0001
+  type        TicketType     @default(SUPPORT)
+  title       String
+  description String         @db.Text
+  status      TicketStatus   @default(OPEN)
+  priority    TicketPriority @default(MEDIUM)
+
+  customerId String
+  systemId   String?
+  serverId   String?
+
+  createdById  String?
+  assignedToId String?
+  reportedBy   String? // nombre/email si no hay usuario asociado
+
+  resolvedAt DateTime?
+  closedAt   DateTime?
+  dueAt      DateTime?
+
+  // Implementación
+  budgetAmount    Decimal? @db.Decimal(12, 2)
+  budgetCurrency  String?  @default("USD")
+  estimatedHours  Float?
+  actualHours     Float?
+  startDate       DateTime?
+  endDate         DateTime?
+
+  // IA / metadata
+  aiSummary  String?  @db.Text
+  aiCategory String?
+  tags       String[]
+
+  customer    Customer             @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  system      System?              @relation(fields: [systemId], references: [id], onDelete: SetNull)
+  server      Server?              @relation(fields: [serverId], references: [id], onDelete: SetNull)
+  createdBy   User?                @relation("TicketCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  assignedTo  User?                @relation("TicketAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  comments    TicketComment[]
+  attachments TicketAttachment[]
+  phases      ImplementationPhase[]
+  conversations AiConversation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([customerId])
+  @@index([systemId])
+  @@index([status])
+  @@index([type])
+  @@index([assignedToId])
+  @@index([priority])
+}
+
+enum CommentSource {
+  USER
+  AI
+  SYSTEM
+}
+
+model TicketComment {
+  id         String        @id @default(cuid())
+  ticketId   String
+  authorId   String?
+  body       String        @db.Text
+  isInternal Boolean       @default(false)
+  source     CommentSource @default(USER)
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author User?  @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([ticketId])
+}
+
+model TicketAttachment {
+  id           String  @id @default(cuid())
+  ticketId     String
+  filename     String
+  url          String
+  mimeType     String?
+  sizeBytes    Int?
+  uploadedById String?
+
+  ticket     Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  uploadedBy User?  @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([ticketId])
+}
+
+enum PhaseStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  BLOCKED
+  CANCELLED
+}
+
+model ImplementationPhase {
+  id             String      @id @default(cuid())
+  ticketId       String
+  name           String
+  description    String?     @db.Text
+  status         PhaseStatus @default(PENDING)
+  order          Int         @default(0)
+  estimatedHours Float?
+  actualHours    Float?
+  budgetAmount   Decimal?    @db.Decimal(12, 2)
+  startDate      DateTime?
+  endDate        DateTime?
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ticketId])
+}
+
+// =======================================================================
+// Knowledge base + RAG
+// =======================================================================
+
+model KbArticle {
+  id         String  @id @default(cuid())
+  slug       String  @unique
+  title      String
+  body       String  @db.Text
+  tags       String[]
+  published  Boolean @default(true)
+
+  customerId  String?
+  productId   String?
+  systemId    String?
+  createdById String?
+
+  customer  Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  product   Product?  @relation(fields: [productId], references: [id], onDelete: SetNull)
+  system    System?   @relation(fields: [systemId], references: [id], onDelete: SetNull)
+  createdBy User?     @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([customerId])
+  @@index([productId])
+}
+
+enum EmbeddingSource {
+  KB_ARTICLE
+  TICKET
+  TICKET_COMMENT
+  SYSTEM
+  CUSTOMER
+}
+
+// embedding column declared as Unsupported; pgvector usado vía SQL crudo
+model EmbeddingDocument {
+  id         String          @id @default(cuid())
+  sourceType EmbeddingSource
+  sourceId   String
+  chunkIndex Int             @default(0)
+  content    String          @db.Text
+  metadata   Json?
+  embedding  Unsupported("vector(1536)")?
+
+  createdAt DateTime @default(now())
+
+  @@unique([sourceType, sourceId, chunkIndex])
+  @@index([sourceType, sourceId])
+}
+
+// =======================================================================
+// IA: conversaciones
+// =======================================================================
+
+enum AiMessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+  TOOL
+}
+
+model AiConversation {
+  id         String   @id @default(cuid())
+  userId     String?
+  customerId String?
+  ticketId   String?
+  title      String?
+
+  user     User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  ticket   Ticket?   @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  messages AiMessage[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([ticketId])
+}
+
+model AiMessage {
+  id             String        @id @default(cuid())
+  conversationId String
+  role           AiMessageRole
+  content        String        @db.Text
+  toolCalls      Json?
+  model          String?
+  tokensIn       Int?
+  tokensOut      Int?
+
+  conversation AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([conversationId])
+}
+
+// =======================================================================
+// Integraciones (API keys configurables desde la UI, encriptadas en DB)
+// =======================================================================
+
+model IntegrationSetting {
+  key             String   @id // e.g. "anthropic.apiKey", "anthropic.model", "openai.apiKey"
+  value           String?  @db.Text // ciphertext base64; null si fue limpiado
+  encrypted       Boolean  @default(true)
+  description     String?
+  lastVerifiedAt  DateTime?
+  lastVerifiedOk  Boolean?
+  lastVerifyError String?  @db.Text
+  updatedById     String?
+  updatedBy       User?    @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// =======================================================================
+// Auditoría
+// =======================================================================
+
+model ActivityLog {
+  id         String  @id @default(cuid())
+  userId     String?
+  entityType String
+  entityId   String
+  action     String
+  diff       Json?
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([userId])
+}

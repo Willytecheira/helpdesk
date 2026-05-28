@@ -1,0 +1,56 @@
+{
+	# Email para Let's Encrypt (definir como variable de entorno)
+	email {$CADDY_EMAIL}
+	# Logs en stdout para que docker logs los capture
+	log {
+		output stdout
+		format console
+	}
+}
+
+{$APP_DOMAIN} {
+	# Headers de seguridad
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		# Defer al app si tiene su propio CSP
+		-Server
+	}
+
+	# Comprime respuestas (gzip + zstd)
+	encode zstd gzip
+
+	# Tamaño max de body (subida de adjuntos hasta 30MB)
+	request_body {
+		max_size 30MB
+	}
+
+	# Reverse proxy a Next.js
+	reverse_proxy app:3000 {
+		header_up Host {host}
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+
+		# Healthcheck
+		health_uri /api/health
+		health_interval 30s
+		health_timeout 5s
+	}
+
+	# Cache de estáticos de Next.js
+	@nextStatic path /_next/static/*
+	header @nextStatic Cache-Control "public, max-age=31536000, immutable"
+
+	# Bloquear acceso a archivos sensibles
+	@blocked {
+		path /.git/*
+		path /.env*
+		path /docker-compose*
+		path /Dockerfile
+	}
+	respond @blocked 404
+}

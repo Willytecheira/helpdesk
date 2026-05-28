@@ -1,0 +1,120 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: helpdesk_postgres_prod
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-helpdesk}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-helpdesk}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5433:5432" # bind sólo a loopback
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: helpdesk-app:latest
+    container_name: helpdesk_app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-helpdesk}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-helpdesk}?schema=public
+      AUTH_SECRET: ${AUTH_SECRET}
+      AUTH_URL: ${AUTH_URL}
+      AUTH_TRUST_HOST: "true"
+      # Fallbacks opcionales; las preferidas se configuran desde /settings/integrations
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM: ${RESEND_FROM:-}
+    volumes:
+      - uploads_data:/app/uploads
+    # NO se expone puerto: solo accesible vía Caddy
+    expose:
+      - "3000"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: helpdesk_caddy
+    restart: unless-stopped
+    depends_on:
+      - app
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN}
+      CADDY_EMAIL: ${CADDY_EMAIL}
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+
+  scheduler:
+    image: alpine:3
+    container_name: helpdesk_scheduler
+    restart: unless-stopped
+    depends_on:
+      - app
+    environment:
+      APP_URL: http://app:3000
+      CRON_SECRET: ${CRON_SECRET:-${AGENT_API_TOKEN:-}}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        apk add --no-cache curl
+        # Procesar tickets recurrentes cada hora
+        echo '0 * * * * curl -fsS -X POST -H "Authorization: Bearer '"$$CRON_SECRET"'" $$APP_URL/api/cron/recurring >> /var/log/cron.log 2>&1' > /etc/crontabs/root
+        touch /var/log/cron.log
+        tail -f /var/log/cron.log &
+        crond -f -L /var/log/cron.log
+
+  backup:
+    image: postgres:16-alpine
+    container_name: helpdesk_backup
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-helpdesk}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB:-helpdesk}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+    volumes:
+      - ./docker/backup.sh:/usr/local/bin/backup.sh:ro
+      - backups_data:/backups
+      - uploads_data:/app/uploads:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        apk add --no-cache tar gzip findutils
+        # Cron simple: corre el backup todos los días a las 03:00
+        echo '0 3 * * * /usr/local/bin/backup.sh >> /var/log/backup.log 2>&1' > /etc/crontabs/root
+        # Primer backup al arrancar (no falla si no hay datos)
+        sh /usr/local/bin/backup.sh || true
+        # Tail del log + cron en foreground
+        touch /var/log/backup.log
+        tail -f /var/log/backup.log &
+        crond -f -L /var/log/cron.log
+
+volumes:
+  postgres_data:
+  uploads_data:
+  caddy_data:
+  caddy_config:
+  backups_data:

@@ -1,36 +1,69 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Helpdesk
 
-## Getting Started
+Plataforma multi-cliente de soporte e implementación con asistencia de IA, inventario de servidores/Docker y dashboard ejecutivo.
 
-First, run the development server:
+## Stack
+
+- **Next.js 16** (App Router) + TypeScript
+- **Postgres 16** con `pgvector` (RAG)
+- **Prisma 6** como ORM
+- **Auth.js v5** (JWT + credentials)
+- **Tailwind v4** + shadcn/ui
+- **Anthropic Claude API** (próximas fases)
+- Deploy en VPS con **Docker Compose**
+
+## Estructura por fases
+
+- ✅ **Fase 1** — Fundación: auth, schema completo, layout, dashboard con KPIs
+- ⬜ Fase 2 — CRUD de clientes, productos, sistemas, servidores y contenedores + agente
+- ⬜ Fase 3 — Helpdesk completo (tickets de soporte, comentarios, notificaciones)
+- ⬜ Fase 4 — IA con RAG (chat Claude, embeddings, acciones sobre tickets)
+- ⬜ Fase 5 — Tickets de implementación (presupuesto, fases, timeline)
+- ⬜ Fase 6 — Dashboard avanzado (gráficos, alertas, métricas)
+
+## Cómo arrancar
 
 ```bash
+# 1. Levantar Postgres + pgvector + Adminer
+docker compose up -d
+
+# 2. Aplicar migraciones (ya aplicadas al inicializar)
+npm run db:migrate
+
+# 3. Cargar datos demo
+npm run db:seed
+
+# 4. Arrancar el dev server
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+App: http://localhost:3000
+Adminer (DB UI): http://localhost:8080 — server: `postgres`, user: `helpdesk`, pass: `helpdesk_dev_password`, db: `helpdesk`
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Cuentas demo
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Rol     | Email                     | Password    |
+| ------- | ------------------------- | ----------- |
+| Admin   | admin@helpdesk.local      | admin123    |
+| Agente  | soporte@helpdesk.local    | agent123    |
+| Cliente | juan@acme.com             | client123   |
 
-## Learn More
+## Variables de entorno
 
-To learn more about Next.js, take a look at the following resources:
+Copia `.env.example` a `.env` y completa:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- `DATABASE_URL` — conexión a Postgres
+- `AUTH_SECRET` — generar con `openssl rand -base64 32`
+- `ANTHROPIC_API_KEY` — necesario para Fase 4 (IA)
+- `AGENT_API_TOKEN` — token compartido con el agente que reporta el estado de servidores
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Scripts
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+npm run dev          # servidor de desarrollo
+npm run build        # build producción
+npm run db:migrate   # nueva migración Prisma
+npm run db:seed      # cargar datos demo
+npm run db:studio    # abrir Prisma Studio
+npm run db:reset     # reset DB (CUIDADO)
+```

@@ -1,0 +1,4 @@
+{
+  "*.{ts,tsx,js,jsx}": ["eslint --no-warn-ignored"],
+  "*.{json,md,yml,yaml}": []
+}
