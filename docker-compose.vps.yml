@@ -1,0 +1,104 @@
+# Variante para VPS con reverse proxy YA EXISTENTE (Nginx en el host).
+# NO levanta Caddy ni toca los puertos 80/443.
+# El helpdesk se publica sólo en loopback (127.0.0.1:APP_PORT) y tu Nginx lo proxea.
+#
+# Uso:
+#   docker compose --env-file .env.vps -f docker-compose.vps.yml up -d --build
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: helpdesk_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-helpdesk}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-helpdesk}
+    volumes:
+      - helpdesk_postgres_data:/var/lib/postgresql/data
+    # Sin publicar al host: sólo accesible dentro de la red del compose.
+    # (Tus otros postgres tampoco publican, así que no hay choque.)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: helpdesk-app:latest
+    container_name: helpdesk_app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-helpdesk}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-helpdesk}?schema=public
+      AUTH_SECRET: ${AUTH_SECRET}
+      AUTH_URL: ${AUTH_URL}
+      AUTH_TRUST_HOST: "true"
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM: ${RESEND_FROM:-}
+      INBOUND_EMAIL_SECRET: ${INBOUND_EMAIL_SECRET:-}
+      SETUP_TOKEN: ${SETUP_TOKEN:-}
+    volumes:
+      - helpdesk_uploads_data:/app/uploads
+    # Publicamos SÓLO a loopback en un puerto libre. Nginx del host lo proxea.
+    ports:
+      - "127.0.0.1:${APP_PORT:-3200}:3000"
+
+  scheduler:
+    image: alpine:3
+    container_name: helpdesk_scheduler
+    restart: unless-stopped
+    depends_on:
+      - app
+    environment:
+      APP_URL: http://app:3000
+      CRON_SECRET: ${CRON_SECRET:-${AGENT_API_TOKEN:-}}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        apk add --no-cache curl
+        echo '0 * * * * curl -fsS -X POST -H "Authorization: Bearer '"$$CRON_SECRET"'" $$APP_URL/api/cron/recurring >> /var/log/cron.log 2>&1' > /etc/crontabs/root
+        touch /var/log/cron.log
+        tail -f /var/log/cron.log &
+        crond -f -L /var/log/cron.log
+
+  backup:
+    image: postgres:16-alpine
+    container_name: helpdesk_backup
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-helpdesk}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB:-helpdesk}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+    volumes:
+      - ./docker/backup.sh:/usr/local/bin/backup.sh:ro
+      - helpdesk_backups_data:/backups
+      - helpdesk_uploads_data:/app/uploads:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        apk add --no-cache tar gzip findutils
+        echo '0 3 * * * /usr/local/bin/backup.sh >> /var/log/backup.log 2>&1' > /etc/crontabs/root
+        sh /usr/local/bin/backup.sh || true
+        touch /var/log/backup.log
+        tail -f /var/log/backup.log &
+        crond -f -L /var/log/cron.log
+
+volumes:
+  helpdesk_postgres_data:
+  helpdesk_uploads_data:
+  helpdesk_backups_data:

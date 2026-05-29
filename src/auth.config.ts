@@ -17,7 +17,8 @@ export const authConfig = {
         path.startsWith("/api/agent") ||
         path.startsWith("/api/health") ||
         path.startsWith("/api/cron") ||
-        path.startsWith("/api/inbound")
+        path.startsWith("/api/inbound") ||
+        path.startsWith("/api/setup")
       ) {
         return true
       }
