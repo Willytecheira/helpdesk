@@ -18,6 +18,18 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN npx prisma generate
 RUN npm run build
 
+# ---------- Etapa 2b: migrator ----------
+# Imagen liviana con TODAS las deps de Prisma (CLI + transitivas) para correr
+# `prisma migrate deploy`. No bundlea Next; usa node_modules completos de deps.
+FROM node:22-alpine AS migrator
+RUN apk add --no-cache libc6-compat openssl
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json package-lock.json* ./
+COPY prisma ./prisma
+RUN npx prisma generate
+CMD ["npx", "prisma", "migrate", "deploy"]
+
 # ---------- Etapa 3: runtime ----------
 FROM node:22-alpine AS runner
 RUN apk add --no-cache libc6-compat openssl tini
@@ -36,21 +48,13 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 
-# Prisma migrations + schema (para correr migrate deploy al arrancar)
-COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules/@prisma ./node_modules/@prisma
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules/prisma ./node_modules/prisma
-
 # Carpeta de uploads persistente
 RUN mkdir -p /app/uploads && chown -R nextjs:nodejs /app/uploads
-
-# Entrypoint corre migrate deploy y luego arranca
-COPY --chown=nextjs:nodejs docker/entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
 
 USER nextjs
 EXPOSE 3000
 
-ENTRYPOINT ["/sbin/tini", "--", "/app/entrypoint.sh"]
+# Las migraciones las corre un contenedor "migrate" dedicado (ver compose).
+# Acá sólo arrancamos el server standalone.
+ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "server.js"]

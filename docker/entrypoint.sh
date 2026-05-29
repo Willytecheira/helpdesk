@@ -1,11 +1,7 @@
 #!/bin/sh
 set -e
 
-echo "▶ Aplicando migraciones Prisma..."
-node node_modules/prisma/build/index.js migrate deploy || {
-  echo "❌ migrate deploy falló"
-  exit 1
-}
-
+# NOTA: ya no se usa (el Dockerfile arranca server.js directo). Las migraciones
+# corren en el servicio "migrate" del compose. Se conserva por compatibilidad.
 echo "▶ Arrancando Next.js"
 exec "$@"
