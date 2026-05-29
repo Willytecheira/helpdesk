@@ -39,8 +39,9 @@ type Props = {
   maskedKey?: string | null
   modelLabel?: string
   modelValue?: string
-  modelDefault: string
+  modelDefault?: string
   modelOptions?: ModelOption[]
+  hideModel?: boolean
   envFallback?: boolean
   lastVerifiedAt?: Date | null
   lastVerifiedOk?: boolean | null
@@ -60,8 +61,9 @@ export function IntegrationCard(props: Props) {
     maskedKey,
     modelLabel = "Modelo",
     modelValue,
-    modelDefault,
+    modelDefault = "",
     modelOptions,
+    hideModel = false,
     envFallback,
     lastVerifiedAt,
     lastVerifiedOk,
@@ -135,24 +137,26 @@ export function IntegrationCard(props: Props) {
             )}
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="model">{modelLabel}</Label>
-            {modelOptions ? (
-              <ModelSelect
-                name={modelOptions === undefined ? "model" : "model"}
-                defaultValue={modelValue || modelDefault}
-                options={modelOptions}
-              />
-            ) : (
-              <Input
-                id="model"
-                name="model"
-                defaultValue={modelValue || modelDefault}
-                placeholder={modelDefault}
-              />
-            )}
-            <p className="text-muted-foreground text-xs">Default: {modelDefault}</p>
-          </div>
+          {!hideModel && (
+            <div className="space-y-2">
+              <Label htmlFor="model">{modelLabel}</Label>
+              {modelOptions ? (
+                <ModelSelect
+                  name="model"
+                  defaultValue={modelValue || modelDefault}
+                  options={modelOptions}
+                />
+              ) : (
+                <Input
+                  id="model"
+                  name="model"
+                  defaultValue={modelValue || modelDefault}
+                  placeholder={modelDefault}
+                />
+              )}
+              <p className="text-muted-foreground text-xs">Default: {modelDefault}</p>
+            </div>
+          )}
 
           <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
             <div className="text-muted-foreground text-xs">

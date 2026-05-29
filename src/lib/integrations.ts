@@ -91,6 +91,8 @@ export const INTEGRATION_KEYS = {
   anthropicModel: "anthropic.model",
   openaiApiKey: "openai.apiKey",
   openaiEmbeddingModel: "openai.embeddingModel",
+  googleApiKey: "google.apiKey",
+  deepseekApiKey: "deepseek.apiKey",
   resendApiKey: "resend.apiKey",
   resendFrom: "resend.from",
   appBaseUrl: "app.baseUrl",

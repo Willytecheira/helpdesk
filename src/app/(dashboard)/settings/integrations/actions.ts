@@ -120,6 +120,79 @@ export async function clearResend(): Promise<ActionResult> {
   return clearByKeys([INTEGRATION_KEYS.resendApiKey, INTEGRATION_KEYS.resendFrom])
 }
 
+// ---------- Proveedores LLM genéricos (Google / DeepSeek) ----------
+
+const llmKeyByProvider: Record<string, string> = {
+  google: INTEGRATION_KEYS.googleApiKey,
+  deepseek: INTEGRATION_KEYS.deepseekApiKey,
+}
+
+async function saveLlmProvider(
+  provider: "google" | "deepseek",
+  _p: ActionResult,
+  fd: FormData
+): Promise<ActionResult> {
+  const user = await requireAdmin()
+  const apiKey = String(fd.get("apiKey") ?? "")
+  if (apiKey && apiKey.length < 8) return actionError("API key inválida", { apiKey: "Muy corta" })
+  const shouldUpdate = apiKey && !apiKey.includes("…")
+  if (shouldUpdate) {
+    await setIntegration(llmKeyByProvider[provider], apiKey, {
+      updatedById: user.id,
+      description: `Clave de ${provider}`,
+    })
+  }
+  logActivity({
+    userId: user.id,
+    entityType: "integration",
+    entityId: provider,
+    action: "integration_update",
+    diff: { keyUpdated: shouldUpdate },
+  })
+  revalidatePath("/settings/integrations")
+  return actionOk()
+}
+
+export async function saveGoogle(p: ActionResult, fd: FormData) {
+  return saveLlmProvider("google", p, fd)
+}
+export async function saveDeepseek(p: ActionResult, fd: FormData) {
+  return saveLlmProvider("deepseek", p, fd)
+}
+export async function clearGoogle(): Promise<ActionResult> {
+  return clearByKeys([INTEGRATION_KEYS.googleApiKey])
+}
+export async function clearDeepseek(): Promise<ActionResult> {
+  return clearByKeys([INTEGRATION_KEYS.deepseekApiKey])
+}
+
+async function testLlmProvider(provider: "google" | "deepseek"): Promise<ActionResult> {
+  await requireAdmin()
+  const { getLanguageModel, PROVIDERS } = await import("@/lib/ai/providers")
+  const model = await getLanguageModel(provider, PROVIDERS[provider].defaultModel)
+  if (!model) return actionError("Configurá la API key primero")
+  try {
+    const { generateText } = await import("ai")
+    const r = await generateText({ model, prompt: "ping", maxOutputTokens: 8 })
+    if (typeof r.text !== "string") throw new Error("Respuesta vacía")
+    await recordVerification(llmKeyByProvider[provider], true)
+    revalidatePath("/settings/integrations")
+    return actionOk()
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : "Error desconocido"
+    await recordVerification(llmKeyByProvider[provider], false, msg)
+    revalidatePath("/settings/integrations")
+    return actionError(msg)
+  }
+}
+
+export async function testGoogle() {
+  return testLlmProvider("google")
+}
+export async function testDeepseek() {
+  return testLlmProvider("deepseek")
+}
+
 // ---------- Resend ----------
 
 const resendSchema = z.object({

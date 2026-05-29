@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { Settings, KeyRound, Users2, ScrollText, Timer } from "lucide-react"
+import { Settings, KeyRound, Users2, ScrollText, Timer, Bot } from "lucide-react"
 import { requireAdmin } from "@/lib/auth-helpers"
 
 export default async function SettingsLayout({
@@ -29,6 +29,13 @@ export default async function SettingsLayout({
           >
             <KeyRound className="size-3.5" />
             Integraciones
+          </Link>
+          <Link
+            href="/settings/agents"
+            className="hover:bg-accent flex items-center gap-2 rounded-md px-2 py-1.5"
+          >
+            <Bot className="size-3.5" />
+            Agentes de IA
           </Link>
           <Link
             href="/settings/sla"

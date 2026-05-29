@@ -350,6 +350,37 @@ async function main() {
     },
   })
 
+  // Agente de IA por defecto
+  await prisma.aiAgent.upsert({
+    where: { slug: "asistente-general" },
+    update: {},
+    create: {
+      name: "Asistente general",
+      slug: "asistente-general",
+      description: "Agente de soporte con acceso a KB, tickets e infraestructura.",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      systemPrompt:
+        "Sos el asistente IA del helpdesk. Ayudás a resolver problemas, buscar en la base de conocimiento y gestionar tickets. Sé breve, claro y respondé en español. Antes de proponer soluciones, buscá en la KB. Pedí confirmación antes de crear o modificar tickets.",
+      tools: [
+        "search_knowledge_base",
+        "get_ticket_by_code",
+        "list_recent_tickets",
+        "get_customer_overview",
+        "get_server_status",
+        "create_ticket",
+        "update_ticket_status",
+        "add_ticket_comment",
+      ],
+      temperature: 0.7,
+      maxTokens: 2048,
+      useRag: true,
+      isDefault: true,
+      active: true,
+      createdById: admin.id,
+    },
+  })
+
   console.log("✅ Seed completo.")
   console.log("")
   console.log("Cuentas demo:")

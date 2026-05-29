@@ -18,6 +18,13 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 import { deleteConversation } from "../actions"
 
@@ -39,13 +46,17 @@ type Message = {
   createdAt: string
 }
 
+type AgentOption = { id: string; name: string; provider: string; model: string }
+
 type Props = {
   conversationId: string
   title: string
   initialMessages: { id: string; role: string; content: string; createdAt: string }[]
+  agents: AgentOption[]
+  currentAgentId: string | null
 }
 
-export function ChatView({ conversationId, title, initialMessages }: Props) {
+export function ChatView({ conversationId, title, initialMessages, agents, currentAgentId }: Props) {
   const router = useRouter()
   const [messages, setMessages] = useState<Message[]>(
     initialMessages.map((m) => ({
@@ -57,6 +68,7 @@ export function ChatView({ conversationId, title, initialMessages }: Props) {
   )
   const [input, setInput] = useState("")
   const [streaming, setStreaming] = useState(false)
+  const [agentId, setAgentId] = useState<string | null>(currentAgentId)
   const endRef = useRef<HTMLDivElement>(null)
   const formRef = useRef<HTMLFormElement>(null)
 
@@ -90,7 +102,7 @@ export function ChatView({ conversationId, title, initialMessages }: Props) {
       const res = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ conversationId, message: text }),
+        body: JSON.stringify({ conversationId, message: text, agentId: agentId ?? undefined }),
       })
 
       if (!res.ok || !res.body) {
@@ -129,18 +141,36 @@ export function ChatView({ conversationId, title, initialMessages }: Props) {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center justify-between border-b px-4 py-3 md:px-6">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <Sparkles className="text-primary size-4" />
-            <h2 className="truncate font-semibold">{title}</h2>
-          </div>
+      <header className="flex items-center justify-between gap-3 border-b px-4 py-3 md:px-6">
+        <div className="flex min-w-0 items-center gap-2">
+          <Sparkles className="text-primary size-4 shrink-0" />
+          <h2 className="truncate font-semibold">{title}</h2>
         </div>
-        <form
-          action={async () => {
-            await deleteConversation(conversationId)
-          }}
-        >
+        <div className="flex shrink-0 items-center gap-2">
+          {agents.length > 0 && (
+            <Select
+              value={agentId ?? "__default__"}
+              onValueChange={(v) => setAgentId(v === "__default__" ? null : v)}
+              disabled={streaming}
+            >
+              <SelectTrigger size="sm" className="w-[180px]">
+                <SelectValue placeholder="Agente" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__default__">Agente por defecto</SelectItem>
+                {agents.map((a) => (
+                  <SelectItem key={a.id} value={a.id}>
+                    {a.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          <form
+            action={async () => {
+              await deleteConversation(conversationId)
+            }}
+          >
           <Button
             type="submit"
             variant="ghost"
@@ -150,7 +180,8 @@ export function ChatView({ conversationId, title, initialMessages }: Props) {
           >
             <Trash2 className="size-4" />
           </Button>
-        </form>
+          </form>
+        </div>
       </header>
 
       <div className="flex-1 overflow-y-auto px-4 py-4 md:px-6">

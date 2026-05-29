@@ -1,4 +1,4 @@
-import { Sparkles, Database, Mail, Info } from "lucide-react"
+import { Sparkles, Database, Mail, Info, Bot, Brain } from "lucide-react"
 import { prisma } from "@/lib/prisma"
 import { PageHeader } from "@/components/page-header"
 import {
@@ -13,12 +13,18 @@ import {
   saveAnthropic,
   saveOpenai,
   saveResend,
+  saveGoogle,
+  saveDeepseek,
   testAnthropic,
   testOpenai,
   testResend,
+  testGoogle,
+  testDeepseek,
   clearAnthropic,
   clearOpenai,
   clearResend,
+  clearGoogle,
+  clearDeepseek,
 } from "./actions"
 
 export const metadata = { title: "Integraciones" }
@@ -53,6 +59,8 @@ export default async function IntegrationsPage() {
     anthropicModelRow,
     openaiKeyRow,
     openaiModelRow,
+    googleKeyRow,
+    deepseekKeyRow,
     resendKeyRow,
     resendFromRow,
   ] = await Promise.all([
@@ -60,12 +68,16 @@ export default async function IntegrationsPage() {
     loadSetting(INTEGRATION_KEYS.anthropicModel),
     loadSetting(INTEGRATION_KEYS.openaiApiKey),
     loadSetting(INTEGRATION_KEYS.openaiEmbeddingModel),
+    loadSetting(INTEGRATION_KEYS.googleApiKey),
+    loadSetting(INTEGRATION_KEYS.deepseekApiKey),
     loadSetting(INTEGRATION_KEYS.resendApiKey),
     loadSetting(INTEGRATION_KEYS.resendFrom),
   ])
 
   const anthropicKey = decryptSafe(anthropicKeyRow?.value ?? null, anthropicKeyRow?.encrypted ?? true)
   const openaiKey = decryptSafe(openaiKeyRow?.value ?? null, openaiKeyRow?.encrypted ?? true)
+  const googleKey = decryptSafe(googleKeyRow?.value ?? null, googleKeyRow?.encrypted ?? true)
+  const deepseekKey = decryptSafe(deepseekKeyRow?.value ?? null, deepseekKeyRow?.encrypted ?? true)
   const resendKey = decryptSafe(resendKeyRow?.value ?? null, resendKeyRow?.encrypted ?? true)
   const anthropicModel = anthropicModelRow?.value && !anthropicModelRow.encrypted
     ? anthropicModelRow.value
@@ -75,10 +87,14 @@ export default async function IntegrationsPage() {
 
   const anthropicEnv = !!process.env.ANTHROPIC_API_KEY
   const openaiEnv = !!process.env.OPENAI_API_KEY
+  const googleEnv = !!process.env.GOOGLE_API_KEY
+  const deepseekEnv = !!process.env.DEEPSEEK_API_KEY
   const resendEnv = !!process.env.RESEND_API_KEY
 
   const anthropicHasKey = !!anthropicKey || anthropicEnv
   const openaiHasKey = !!openaiKey || openaiEnv
+  const googleHasKey = !!googleKey || googleEnv
+  const deepseekHasKey = !!deepseekKey || deepseekEnv
   const resendHasKey = !!resendKey || resendEnv
 
   return (
@@ -140,6 +156,40 @@ export default async function IntegrationsPage() {
           saveAction={saveOpenai}
           testAction={testOpenai}
           clearAction={clearOpenai}
+        />
+
+        <IntegrationCard
+          title="Google (Gemini)"
+          description="Modelos Gemini para el chat IA. El modelo se elige en cada agente."
+          icon={<Bot className="size-4" />}
+          hasKey={googleHasKey}
+          maskedKey={googleKey ? maskSecret(googleKey) : ""}
+          hideModel
+          envFallback={!googleKey && googleEnv}
+          envHint="GOOGLE_API_KEY"
+          lastVerifiedAt={googleKeyRow?.lastVerifiedAt ?? null}
+          lastVerifiedOk={googleKeyRow?.lastVerifiedOk ?? null}
+          lastVerifyError={googleKeyRow?.lastVerifyError ?? null}
+          saveAction={saveGoogle}
+          testAction={testGoogle}
+          clearAction={clearGoogle}
+        />
+
+        <IntegrationCard
+          title="DeepSeek"
+          description="Modelos DeepSeek (chat y reasoner) para el chat IA. El modelo se elige en cada agente."
+          icon={<Brain className="size-4" />}
+          hasKey={deepseekHasKey}
+          maskedKey={deepseekKey ? maskSecret(deepseekKey) : ""}
+          hideModel
+          envFallback={!deepseekKey && deepseekEnv}
+          envHint="DEEPSEEK_API_KEY"
+          lastVerifiedAt={deepseekKeyRow?.lastVerifiedAt ?? null}
+          lastVerifiedOk={deepseekKeyRow?.lastVerifiedOk ?? null}
+          lastVerifyError={deepseekKeyRow?.lastVerifyError ?? null}
+          saveAction={saveDeepseek}
+          testAction={testDeepseek}
+          clearAction={clearDeepseek}
         />
 
         <IntegrationCard

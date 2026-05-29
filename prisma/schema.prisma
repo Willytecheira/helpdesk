@@ -60,6 +60,7 @@ model User {
   authoredKbArticles KbArticle[]
   integrationsUpdated IntegrationSetting[]
   recurringTickets   RecurringTicket[]
+  aiAgents           AiAgent[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -608,11 +609,13 @@ model AiConversation {
   userId     String?
   customerId String?
   ticketId   String?
+  agentId    String?
   title      String?
 
   user     User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
   customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
   ticket   Ticket?   @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  agent    AiAgent?  @relation(fields: [agentId], references: [id], onDelete: SetNull)
   messages AiMessage[]
 
   createdAt DateTime @default(now())
@@ -620,6 +623,32 @@ model AiConversation {
 
   @@index([userId])
   @@index([ticketId])
+}
+
+model AiAgent {
+  id           String   @id @default(cuid())
+  name         String
+  slug         String   @unique
+  description  String?
+  provider     String   // anthropic | openai | google | deepseek
+  model        String
+  systemPrompt String   @db.Text
+  tools        String[] // nombres de tools habilitadas
+  temperature  Float    @default(0.7)
+  maxTokens    Int      @default(2048)
+  useRag       Boolean  @default(true)
+  isDefault    Boolean  @default(false)
+  active       Boolean  @default(true)
+
+  createdById String?
+  createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  conversations AiConversation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([active])
 }
 
 model AiMessage {
