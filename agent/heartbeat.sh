@@ -17,7 +17,12 @@
 # Para ejecutar cada 1 minuto vía cron:
 #   * * * * * HELPDESK_URL=... AGENT_TOKEN=... /opt/helpdesk-agent/heartbeat.sh
 
-set -euo pipefail
+# Sin `set -e`/`pipefail` a propósito: es un colector de métricas y no debe
+# abortar si una métrica individual falla (p. ej. `top` sin TTY bajo systemd).
+set -u
+
+# Asegura que docker/jq/curl se encuentren aunque systemd use un PATH reducido.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH:-}"
 
 : "${HELPDESK_URL:?HELPDESK_URL no está definido}"
 : "${AGENT_TOKEN:?AGENT_TOKEN no está definido}"
