@@ -204,7 +204,9 @@ export async function saveResend(_p: ActionResult, fd: FormData): Promise<Action
   const user = await requireAdmin()
   const parsed = resendSchema.safeParse({
     apiKey: fd.get("apiKey") || "",
-    from: fd.get("from") || "",
+    // El IntegrationCard renderiza el campo "From" con name="model" (slot genérico).
+    // Leemos "model" primero y dejamos "from" como fallback.
+    from: fd.get("model") || fd.get("from") || "",
   })
   if (!parsed.success) return actionError("Revisá los campos", fieldErrors(parsed))
 
