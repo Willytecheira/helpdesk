@@ -85,44 +85,47 @@ containers_json() {
   stats_tmp=$(mktemp)
   ps_tmp=$(mktemp)
 
-  docker stats --no-stream --format '{{json .}}' >"$stats_tmp" 2>/dev/null || echo "" >"$stats_tmp"
-  docker ps -a --format '{{json .}}' >"$ps_tmp" 2>/dev/null || echo "" >"$ps_tmp"
+  docker stats --no-stream --format '{{json .}}' >"$stats_tmp" 2>/dev/null || true
+  docker ps -a --format '{{json .}}' >"$ps_tmp" 2>/dev/null || true
 
-  jq -s '
-    (.[0] | map(select(type=="object"))) as $stats |
-    (.[1] | map(select(type=="object"))) as $ps |
-    $ps | map(
-      . as $c |
-      ($stats[] | select(.Name == $c.Names) // null) as $s |
-      {
-        containerId: ($c.ID // null),
-        name: ($c.Names // ""),
-        image: ((($c.Image // "") | split(":")[0]) // ""),
-        imageTag: ((($c.Image // "") | split(":")[1]) // null),
-        status: (
-          if ($c.State // "" | ascii_downcase) | test("running") then "RUNNING"
-          elif ($c.State // "" | ascii_downcase) | test("paused") then "PAUSED"
-          elif ($c.State // "" | ascii_downcase) | test("restarting") then "RESTARTING"
-          elif ($c.State // "" | ascii_downcase) | test("created") then "CREATED"
-          elif ($c.State // "" | ascii_downcase) | test("exited") then "EXITED"
-          elif ($c.State // "" | ascii_downcase) | test("dead") then "DEAD"
-          else "UNKNOWN" end
-        ),
-        cpuPercent: (
-          if $s then ($s.CPUPerc // "" | gsub("%";"") | tonumber? // null) else null end
-        ),
-        memoryMb: (
-          if $s then
-            ($s.MemUsage // "" | split(" / ")[0]) as $m |
-            if   ($m | test("GiB$")) then ($m | gsub("GiB$";"") | tonumber? * 1024)
-            elif ($m | test("MiB$")) then ($m | gsub("MiB$";"") | tonumber?)
-            elif ($m | test("KiB$")) then ($m | gsub("KiB$";"") | tonumber? / 1024)
-            else null end
-          else null end
-        )
-      }
-    )
-  ' "$stats_tmp" "$ps_tmp"
+  # --slurpfile mantiene CADA archivo como su propio array (a diferencia de
+  # `jq -s` con varios archivos, que los aplana todos en uno solo → bug).
+  jq -n --slurpfile stats "$stats_tmp" --slurpfile ps "$ps_tmp" '
+    ($stats | map(select(type=="object"))) as $st
+    | ($ps | map(select(type=="object")))
+    | map(
+        . as $c
+        | ((first($st[] | select(.Name == ($c.Names // "")))) // null) as $s
+        | {
+            containerId: ($c.ID // null),
+            name: ($c.Names // ""),
+            image: (($c.Image // "") | split(":")[0]),
+            imageTag: (($c.Image // "") | split(":")[1] // null),
+            status: (
+              (($c.State // "") | ascii_downcase) as $state
+              | if   ($state | test("running"))    then "RUNNING"
+                elif ($state | test("paused"))     then "PAUSED"
+                elif ($state | test("restarting")) then "RESTARTING"
+                elif ($state | test("created"))    then "CREATED"
+                elif ($state | test("exited"))     then "EXITED"
+                elif ($state | test("dead"))       then "DEAD"
+                else "UNKNOWN" end
+            ),
+            cpuPercent: (
+              if $s then (($s.CPUPerc // "") | gsub("%";"") | (tonumber? // null)) else null end
+            ),
+            memoryMb: (
+              if $s then
+                (($s.MemUsage // "") | split(" / ")[0]) as $m
+                | if   ($m | test("GiB$")) then (($m | gsub("GiB$";"") | (tonumber? // 0)) * 1024)
+                  elif ($m | test("MiB$")) then ($m | gsub("MiB$";"") | (tonumber? // null))
+                  elif ($m | test("KiB$")) then (($m | gsub("KiB$";"") | (tonumber? // 0)) / 1024)
+                  else null end
+              else null end
+            )
+          }
+      )
+  '
 
   rm -f "$stats_tmp" "$ps_tmp"
 }
@@ -137,7 +140,8 @@ UPTIME=$(uptime_seconds)
 DOCKER_VER=$(docker_version || true)
 HOSTNAME_VAL=$(hostname 2>/dev/null || echo "")
 OS_VAL=$( ( . /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-}" ) || uname -s )
-CONTAINERS=$(containers_json)
+CONTAINERS=$(containers_json 2>/dev/null || echo "[]")
+[ -z "$CONTAINERS" ] && CONTAINERS="[]"
 
 payload=$(jq -n \
   --arg hostname "$HOSTNAME_VAL" \
