@@ -72,6 +72,27 @@ docker_version() {
   fi
 }
 
+# -------- capacidad del host --------
+
+cpu_cores() {
+  nproc 2>/dev/null || grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo ""
+}
+
+memory_total_gb() {
+  awk '/^MemTotal:/ { printf "%.2f", $2/1024/1024 }' /proc/meminfo 2>/dev/null || echo ""
+}
+
+disk_total_gb() {
+  df -P / 2>/dev/null | awk 'NR==2 { printf "%.1f", $2/1024/1024 }'
+}
+
+primary_ip() {
+  # IP de la interfaz por defecto (evita loopback/docker)
+  ip route get 1.1.1.1 2>/dev/null \
+    | awk '{ for (i=1;i<=NF;i++) if ($i=="src") { print $(i+1); exit } }' \
+    || hostname -I 2>/dev/null | awk '{ print $1 }'
+}
+
 # -------- contenedores docker --------
 
 containers_json() {
@@ -145,6 +166,10 @@ UPTIME=$(uptime_seconds)
 DOCKER_VER=$(docker_version || true)
 HOSTNAME_VAL=$(hostname 2>/dev/null || echo "")
 OS_VAL=$( ( . /etc/os-release 2>/dev/null && echo "${PRETTY_NAME:-}" ) || uname -s )
+CPU_CORES=$(cpu_cores)
+MEM_GB=$(memory_total_gb)
+DISK_GB=$(disk_total_gb)
+IP_ADDR=$(primary_ip 2>/dev/null || echo "")
 CONTAINERS=$(containers_json 2>/dev/null || echo "[]")
 [ -z "$CONTAINERS" ] && CONTAINERS="[]"
 
@@ -152,6 +177,7 @@ payload=$(jq -n \
   --arg hostname "$HOSTNAME_VAL" \
   --arg os "$OS_VAL" \
   --arg dockerVersion "${DOCKER_VER:-}" \
+  --arg ipAddress "${IP_ADDR:-}" \
   --argjson cpuPercent "${CPU:-null}" \
   --argjson memoryPercent "${MEM:-null}" \
   --argjson diskPercent "${DISK:-null}" \
@@ -159,11 +185,15 @@ payload=$(jq -n \
   --argjson loadAvg5 "${LOAD5:-null}" \
   --argjson loadAvg15 "${LOAD15:-null}" \
   --argjson uptimeSeconds "${UPTIME:-null}" \
+  --argjson cpuCores "${CPU_CORES:-null}" \
+  --argjson memoryGb "${MEM_GB:-null}" \
+  --argjson diskGb "${DISK_GB:-null}" \
   --argjson containers "${CONTAINERS}" \
   '{
     hostname: (if $hostname == "" then null else $hostname end),
     os: (if $os == "" then null else $os end),
     dockerVersion: (if $dockerVersion == "" then null else $dockerVersion end),
+    ipAddress: (if $ipAddress == "" then null else $ipAddress end),
     cpuPercent: $cpuPercent,
     memoryPercent: $memoryPercent,
     diskPercent: $diskPercent,
@@ -171,6 +201,9 @@ payload=$(jq -n \
     loadAvg5: $loadAvg5,
     loadAvg15: $loadAvg15,
     uptimeSeconds: $uptimeSeconds,
+    cpuCores: $cpuCores,
+    memoryGb: $memoryGb,
+    diskGb: $diskGb,
     containers: $containers
   } | with_entries(select(.value != null))')
 

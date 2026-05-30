@@ -29,6 +29,11 @@ const heartbeatSchema = z.object({
   dockerVersion: z.string().optional(),
   hostname: z.string().optional(),
   os: z.string().optional(),
+  // Capacidad del host (la reporta el agente para no cargarla a mano)
+  cpuCores: z.number().int().positive().max(1024).optional(),
+  memoryGb: z.number().positive().max(100000).optional(),
+  diskGb: z.number().positive().max(10000000).optional(),
+  ipAddress: z.string().max(64).optional(),
   containers: z.array(containerSchema).optional(),
   raw: z.record(z.string(), z.unknown()).optional(),
 })
@@ -53,7 +58,7 @@ export async function POST(req: NextRequest) {
 
   const server = await prisma.server.findUnique({
     where: { agentToken: token },
-    select: { id: true, customerId: true },
+    select: { id: true, customerId: true, ipAddress: true },
   })
   if (!server) {
     return NextResponse.json({ error: "invalid_token" }, { status: 401 })
@@ -100,6 +105,12 @@ export async function POST(req: NextRequest) {
         status: deriveServerStatus(data),
         os: data.os ?? undefined,
         hostname: data.hostname ?? undefined,
+        // Capacidad del host (datos físicos: el agente es la fuente de verdad)
+        cpuCores: data.cpuCores ?? undefined,
+        memoryGb: data.memoryGb ?? undefined,
+        diskGb: data.diskGb ?? undefined,
+        // IP: sólo completar si el admin no la cargó manualmente
+        ipAddress: server.ipAddress ? undefined : (data.ipAddress ?? undefined),
       },
     })
 
