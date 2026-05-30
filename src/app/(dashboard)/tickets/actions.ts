@@ -238,21 +238,36 @@ export async function addTicketComment(
     return actionError("Datos inválidos", errs)
   }
 
-  const ticket = await prisma.ticket.findUnique({ where: { id: ticketId }, select: { customerId: true } })
+  const ticket = await prisma.ticket.findUnique({
+    where: { id: ticketId },
+    select: { customerId: true, channel: true, channelRef: true },
+  })
   if (!ticket) return actionError("Ticket no encontrado")
   if (user.role === "CLIENT" && ticket.customerId !== user.customerId) {
     return actionError("No autorizado")
   }
 
+  const isInternal = user.role !== "CLIENT" && !!parsed.data.isInternal
   const created = await prisma.ticketComment.create({
     data: {
       ticketId,
       authorId: user.id,
       body: parsed.data.body.trim(),
-      isInternal: user.role !== "CLIENT" && !!parsed.data.isInternal,
+      isInternal,
       source: "USER",
     },
   })
+
+  // Si es un ticket de WhatsApp y la respuesta es pública del staff, enviarla al número.
+  if (
+    !isInternal &&
+    user.role !== "CLIENT" &&
+    ticket.channel === "WHATSAPP" &&
+    ticket.channelRef
+  ) {
+    const { sendWhatsappText } = await import("@/lib/evolution")
+    sendWhatsappText(ticket.channelRef, parsed.data.body.trim()).catch(() => {})
+  }
 
   revalidatePath(`/tickets/${ticketId}`)
   indexTicket(ticketId).catch(() => {})

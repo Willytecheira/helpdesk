@@ -417,6 +417,12 @@ enum TicketPriority {
   URGENT
 }
 
+enum TicketChannel {
+  WEB
+  EMAIL
+  WHATSAPP
+}
+
 model Ticket {
   id          String         @id @default(cuid())
   code        String         @unique // TKT-0001, IMP-0001
@@ -425,6 +431,10 @@ model Ticket {
   description String         @db.Text
   status      TicketStatus   @default(OPEN)
   priority    TicketPriority @default(MEDIUM)
+
+  // Canal de origen y referencia externa (nº de WhatsApp, email del remitente)
+  channel    TicketChannel @default(WEB)
+  channelRef String?
 
   customerId String
   systemId   String?

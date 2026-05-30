@@ -1,0 +1,287 @@
+import { NextResponse, type NextRequest } from "next/server"
+import type { ModelMessage } from "ai"
+import { prisma } from "@/lib/prisma"
+import { generateTicketCode } from "@/lib/ticket-codes"
+import { indexTicket } from "@/lib/ai-indexer"
+import { notifyTicketCreated, notifyTicketComment } from "@/lib/notifications"
+import { getRequestIp, rateLimitResponse } from "@/lib/rate-limit"
+import { logActivity } from "@/lib/audit"
+import { agentLogger } from "@/lib/logger"
+import { getEvolutionConfig } from "@/lib/integrations"
+import { jidToNumber, isGroupJid, sendWhatsappText } from "@/lib/evolution"
+import { runAgentReply } from "@/lib/ai/run-agent"
+import type { AiToolContext } from "@/lib/ai-tools"
+
+export const runtime = "nodejs"
+export const dynamic = "force-dynamic"
+
+const OPEN_STATUSES = ["OPEN", "IN_PROGRESS", "WAITING_CLIENT"] as const
+
+/** Extrae el texto de un objeto `message` de WhatsApp (varias formas posibles). */
+function extractText(message: unknown): string {
+  if (!message || typeof message !== "object") return ""
+  const m = message as Record<string, unknown>
+  const get = (o: unknown, k: string): string | undefined => {
+    if (o && typeof o === "object" && k in o) {
+      const v = (o as Record<string, unknown>)[k]
+      return typeof v === "string" ? v : undefined
+    }
+    return undefined
+  }
+  return (
+    get(m, "conversation") ??
+    get(m.extendedTextMessage, "text") ??
+    get(m.imageMessage, "caption") ??
+    get(m.videoMessage, "caption") ??
+    get(m.documentMessage, "caption") ??
+    get(m.buttonsResponseMessage, "selectedDisplayText") ??
+    get(m.listResponseMessage, "title") ??
+    ""
+  ).trim()
+}
+
+/** Busca el cliente al que pertenece un número (por contacto o por teléfono del cliente). */
+async function mapNumberToCustomer(number: string): Promise<string | null> {
+  const last8 = number.slice(-8)
+  if (last8.length >= 6) {
+    const contact = await prisma.contact.findFirst({
+      where: { phone: { contains: last8 } },
+      select: { customerId: true },
+    })
+    if (contact) return contact.customerId
+
+    const customer = await prisma.customer.findFirst({
+      where: { phone: { contains: last8 } },
+      select: { id: true },
+    })
+    if (customer) return customer.id
+  }
+  return null
+}
+
+export async function POST(req: NextRequest) {
+  const ip = getRequestIp(req.headers)
+  const rl = rateLimitResponse(ip, "wa-inbound", 120, 60_000)
+  if (rl) return rl
+
+  const cfg = await getEvolutionConfig()
+
+  // Autenticación: token en ?token= o header Authorization Bearer.
+  if (cfg.webhookToken) {
+    const provided =
+      req.nextUrl.searchParams.get("token") ||
+      /^Bearer\s+(.+)$/i.exec(req.headers.get("authorization") ?? "")?.[1]
+    if (provided !== cfg.webhookToken) {
+      return NextResponse.json({ error: "unauthorized" }, { status: 401 })
+    }
+  }
+
+  let body: unknown
+  try {
+    body = await req.json()
+  } catch {
+    return NextResponse.json({ error: "invalid_json" }, { status: 400 })
+  }
+
+  // Evolution puede mandar un objeto o (raro) un array de eventos.
+  const events = Array.isArray(body) ? body : [body]
+
+  for (const ev of events) {
+    if (!ev || typeof ev !== "object") continue
+    const e = ev as Record<string, unknown>
+    const eventName = String(e.event ?? "").toLowerCase().replace(/_/g, ".")
+    if (eventName && eventName !== "messages.upsert") continue
+
+    const data = e.data as Record<string, unknown> | undefined
+    if (!data) continue
+    const key = data.key as Record<string, unknown> | undefined
+    const remoteJid = String(key?.remoteJid ?? "")
+    const fromMe = key?.fromMe === true
+
+    // Ignorar: mensajes propios (evita loop), grupos, sin JID
+    if (fromMe || !remoteJid || isGroupJid(remoteJid)) continue
+
+    const text = extractText(data.message)
+    const pushName = typeof data.pushName === "string" ? data.pushName : null
+    const number = jidToNumber(remoteJid)
+    if (!number) continue
+
+    try {
+      await handleIncoming({ number, text, pushName, cfg })
+    } catch (err) {
+      agentLogger.error(
+        { err: String(err), number: number.slice(-4) },
+        "wa_inbound_handle_error"
+      )
+    }
+  }
+
+  // Siempre 200 para que Evolution no reintente en loop.
+  return NextResponse.json({ ok: true })
+}
+
+async function handleIncoming(opts: {
+  number: string
+  text: string
+  pushName: string | null
+  cfg: Awaited<ReturnType<typeof getEvolutionConfig>>
+}) {
+  const { number, text, pushName, cfg } = opts
+  const display = pushName ? `${pushName} (${number})` : number
+  const messageText = text || "(mensaje sin texto)"
+
+  // 1. ¿Hay un ticket de WhatsApp abierto para este número?
+  let ticket = await prisma.ticket.findFirst({
+    where: {
+      channel: "WHATSAPP",
+      channelRef: number,
+      status: { in: [...OPEN_STATUSES] },
+    },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, code: true, customerId: true },
+  })
+
+  let isNew = false
+
+  if (ticket) {
+    // Anexar el mensaje entrante como comentario
+    const comment = await prisma.ticketComment.create({
+      data: {
+        ticketId: ticket.id,
+        authorId: null,
+        body: messageText,
+        source: "USER",
+      },
+    })
+    indexTicket(ticket.id).catch(() => {})
+    notifyTicketComment(ticket.id, comment.id, null).catch(() => {})
+    logActivity({
+      userId: null,
+      entityType: "ticket_comment",
+      entityId: comment.id,
+      action: "create",
+      diff: { via: "whatsapp", from: number, ticket: ticket.code },
+    })
+  } else {
+    // 2. Crear ticket nuevo. Mapear número → cliente (o usar el cliente por defecto).
+    let customerId = await mapNumberToCustomer(number)
+    if (!customerId && cfg.defaultCustomerId) customerId = cfg.defaultCustomerId
+
+    if (!customerId) {
+      agentLogger.warn({ from: number }, "wa_inbound_unmapped_number")
+      // Sin cliente no podemos crear ticket. Avisamos por WhatsApp si hay auto-reply.
+      if (cfg.autoReply) {
+        await sendWhatsappText(
+          number,
+          "Hola 👋 No pudimos identificar tu cuenta. Un agente se va a contactar a la brevedad."
+        )
+      }
+      return
+    }
+
+    const title = messageText.replace(/\s+/g, " ").slice(0, 80) || `WhatsApp de ${number}`
+    const created = await prisma.$transaction(async (tx) => {
+      const code = await generateTicketCode(tx, "SUPPORT")
+      return tx.ticket.create({
+        data: {
+          code,
+          type: "SUPPORT",
+          title,
+          description: `${messageText}\n\n— Recibido por WhatsApp de ${display}`,
+          priority: "MEDIUM",
+          status: "OPEN",
+          channel: "WHATSAPP",
+          channelRef: number,
+          customerId,
+          tags: ["whatsapp"],
+        },
+        select: { id: true, code: true, customerId: true },
+      })
+    })
+    ticket = created
+    isNew = true
+
+    indexTicket(ticket.id).catch(() => {})
+    notifyTicketCreated(ticket.id, null).catch(() => {})
+    logActivity({
+      userId: null,
+      entityType: "ticket",
+      entityId: ticket.id,
+      action: "create",
+      diff: { via: "whatsapp", from: number },
+    })
+  }
+
+  // 3. Auto-respuesta del agente IA (si está habilitada)
+  if (!cfg.autoReply) return
+
+  const history = await buildHistory(ticket.id, isNew ? messageText : null)
+
+  const ctx: AiToolContext = {
+    userId: "",
+    role: "CLIENT",
+    customerId: ticket.customerId,
+  }
+
+  const extraSystem = [
+    "Estás respondiendo a un cliente por WhatsApp.",
+    "Respuestas BREVES y en texto plano (sin tablas ni markdown complejo; emojis ok con moderación).",
+    `Este es el ticket ${ticket.code}. Si el problema queda resuelto, decilo claramente.`,
+    "Si no podés resolverlo o requiere intervención humana, avisá que derivás a un agente.",
+  ].join(" ")
+
+  const reply = await runAgentReply({
+    agentId: cfg.agentId,
+    ctx,
+    messages: history,
+    readOnly: true,
+    extraSystem,
+  })
+
+  if (!reply || !reply.text) {
+    agentLogger.warn({ ticket: ticket.code }, "wa_no_agent_reply")
+    return
+  }
+
+  // Enviar por WhatsApp y registrar como comentario AI
+  const sent = await sendWhatsappText(number, reply.text)
+  await prisma.ticketComment.create({
+    data: {
+      ticketId: ticket.id,
+      authorId: null,
+      body: reply.text,
+      source: "AI",
+    },
+  })
+  indexTicket(ticket.id).catch(() => {})
+
+  if (!sent) {
+    agentLogger.warn({ ticket: ticket.code }, "wa_reply_send_failed")
+  }
+}
+
+/** Construye el historial de mensajes para el agente desde los comentarios del ticket. */
+async function buildHistory(
+  ticketId: string,
+  seedText: string | null
+): Promise<ModelMessage[]> {
+  if (seedText) {
+    // Ticket recién creado: el mensaje del cliente está en la descripción.
+    return [{ role: "user", content: seedText }]
+  }
+  const comments = await prisma.ticketComment.findMany({
+    where: { ticketId, isInternal: false, source: { in: ["USER", "AI"] } },
+    orderBy: { createdAt: "asc" },
+    take: 20,
+    select: { body: true, source: true },
+  })
+  const msgs: ModelMessage[] = comments.map((c) => ({
+    role: c.source === "AI" ? "assistant" : "user",
+    content: c.body,
+  }))
+  // Garantizar que la conversación termine en un turno del usuario.
+  if (msgs.length === 0 || msgs[msgs.length - 1].role !== "user") {
+    return msgs.length ? msgs : [{ role: "user", content: "Hola" }]
+  }
+  return msgs
+}

@@ -96,6 +96,14 @@ export const INTEGRATION_KEYS = {
   resendApiKey: "resend.apiKey",
   resendFrom: "resend.from",
   appBaseUrl: "app.baseUrl",
+  // WhatsApp vía Evolution API
+  evolutionApiUrl: "evolution.apiUrl",
+  evolutionApiKey: "evolution.apiKey",
+  evolutionInstance: "evolution.instance",
+  evolutionAgentId: "evolution.agentId",
+  evolutionDefaultCustomerId: "evolution.defaultCustomerId",
+  evolutionAutoReply: "evolution.autoReply",
+  evolutionWebhookToken: "evolution.webhookToken",
 } as const
 
 export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6"
@@ -121,6 +129,42 @@ export async function getOpenAiConfig() {
   return {
     apiKey,
     embeddingModel: embeddingModel || DEFAULT_EMBEDDING_MODEL,
+  }
+}
+
+export const DEFAULT_EVOLUTION_INSTANCE = "helpdesk"
+
+export type EvolutionConfig = {
+  apiUrl: string | null
+  apiKey: string | null
+  instance: string
+  agentId: string | null
+  defaultCustomerId: string | null
+  autoReply: boolean
+  webhookToken: string | null
+  configured: boolean
+}
+
+export async function getEvolutionConfig(): Promise<EvolutionConfig> {
+  const [apiUrl, apiKey, instance, agentId, defaultCustomerId, autoReply, webhookToken] =
+    await Promise.all([
+      getIntegration(INTEGRATION_KEYS.evolutionApiUrl, "EVOLUTION_API_URL"),
+      getIntegration(INTEGRATION_KEYS.evolutionApiKey, "EVOLUTION_API_KEY"),
+      getIntegration(INTEGRATION_KEYS.evolutionInstance, "EVOLUTION_INSTANCE"),
+      getIntegration(INTEGRATION_KEYS.evolutionAgentId),
+      getIntegration(INTEGRATION_KEYS.evolutionDefaultCustomerId),
+      getIntegration(INTEGRATION_KEYS.evolutionAutoReply),
+      getIntegration(INTEGRATION_KEYS.evolutionWebhookToken),
+    ])
+  return {
+    apiUrl: apiUrl ? apiUrl.replace(/\/+$/, "") : null,
+    apiKey,
+    instance: instance || DEFAULT_EVOLUTION_INSTANCE,
+    agentId: agentId || null,
+    defaultCustomerId: defaultCustomerId || null,
+    autoReply: autoReply === "true",
+    webhookToken: webhookToken || null,
+    configured: !!(apiUrl && apiKey),
   }
 }
 
