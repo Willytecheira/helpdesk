@@ -1,11 +1,14 @@
 "use client"
 
 import { useState, useTransition } from "react"
-import { Copy, RefreshCw, Loader2, Check, KeyRound, Terminal } from "lucide-react"
+import { Copy, RefreshCw, Loader2, Check, KeyRound, Terminal, Download } from "lucide-react"
 import { toast } from "sonner"
 import { regenerateAgentToken } from "../actions"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+
+const AGENT_REPO_RAW =
+  "https://raw.githubusercontent.com/Willytecheira/helpdesk/main/agent"
 
 export function AgentTokenCard({ serverId, token: initialToken }: { serverId: string; token: string }) {
   const [token, setToken] = useState(initialToken)
@@ -13,6 +16,10 @@ export function AgentTokenCard({ serverId, token: initialToken }: { serverId: st
   const [pending, start] = useTransition()
 
   const baseUrl = typeof window !== "undefined" ? window.location.origin : ""
+
+  const installCmd = `curl -fsSL ${AGENT_REPO_RAW}/install.sh | sudo bash -s -- \\
+  --url ${baseUrl} \\
+  --token ${token}`
 
   const cmd = `curl -X POST ${baseUrl}/api/agent/heartbeat \\
   -H "Authorization: Bearer ${token}" \\
@@ -28,6 +35,32 @@ export function AgentTokenCard({ serverId, token: initialToken }: { serverId: st
 
   return (
     <div className="space-y-4">
+      <Card className="border-primary/30">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Download className="size-4" />
+            Instalación en 1 comando
+          </CardTitle>
+          <CardDescription>
+            Ejecutá esto <strong>en el servidor que querés monitorear</strong> (como root/sudo).
+            Instala el agente, lo deja corriendo como servicio y empieza a reportar
+            CPU, RAM, disco y contenedores Docker cada minuto.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <pre className="bg-muted overflow-x-auto rounded-md p-3 text-xs">{installCmd}</pre>
+          <Button size="sm" onClick={() => copy(installCmd)}>
+            {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
+            Copiar comando de instalación
+          </Button>
+          <p className="text-muted-foreground text-xs">
+            Requiere <code>curl</code> y <code>jq</code> (los instala solo). Para Docker,
+            el agente lee los contenedores del host. Para desinstalar:{" "}
+            <code>curl -fsSL {AGENT_REPO_RAW}/uninstall.sh | sudo bash</code>
+          </p>
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -35,8 +68,8 @@ export function AgentTokenCard({ serverId, token: initialToken }: { serverId: st
             Token del agente
           </CardTitle>
           <CardDescription>
-            Configurá este token en el agente instalado en el servidor. Se usa para
-            autenticar reportes de heartbeat (CPU, RAM, contenedores).
+            Este token autentica los reportes de este servidor. Ya está incluido en el
+            comando de instalación de arriba. Si lo regenerás, tenés que reinstalar el agente.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">

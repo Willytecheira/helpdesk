@@ -1,91 +1,64 @@
 # Helpdesk Agent
 
-Agente ligero que reporta el estado de un servidor + sus contenedores Docker al backend.
+Agente liviano que reporta el estado de un servidor (CPU, RAM, disco, uptime) y
+sus contenedores Docker al Helpdesk, cada minuto.
 
-## Instalación
+## Instalación rápida (recomendada)
 
-En el servidor a monitorear:
-
-```bash
-sudo mkdir -p /opt/helpdesk-agent
-sudo curl -fsSL https://TU-HELPDESK/agent/heartbeat.sh -o /opt/helpdesk-agent/heartbeat.sh
-sudo chmod +x /opt/helpdesk-agent/heartbeat.sh
-
-# o subiendo el archivo manualmente
-```
-
-Dependencias: `bash`, `curl`, `jq`, opcionalmente `docker`.
+En el sistema, andá a **Infraestructura → tu servidor → tab Agente** y copiá el
+comando que ya trae la URL y el token. Se ve así:
 
 ```bash
-apt-get install -y curl jq
+curl -fsSL https://raw.githubusercontent.com/Willytecheira/helpdesk/main/agent/install.sh | sudo bash -s -- \
+  --url https://helpdesk.tudominio.com \
+  --token EL_TOKEN_DEL_SERVIDOR
 ```
 
-## Configuración
+Eso:
+- Instala dependencias (`curl`, `jq`) si faltan
+- Descarga el agente a `/opt/helpdesk-agent/`
+- Guarda la config en `/etc/helpdesk-agent.env`
+- Crea un servicio + timer de systemd (o cron) que reporta cada 60s
+- Hace un primer reporte de prueba
 
-Obtené el token del servidor desde Helpdesk → Infraestructura → servidor → tab "Agente".
+En menos de 1 minuto el servidor aparece con sus métricas y contenedores en el panel.
 
-Crear `/etc/helpdesk-agent.env`:
+### Opciones
+
+```
+--url       URL del helpdesk (requerido)
+--token     token del servidor (requerido)
+--interval  segundos entre reportes (default 60)
+```
+
+## Desinstalar
 
 ```bash
-HELPDESK_URL=https://helpdesk.tudominio.com
-AGENT_TOKEN=hex_token_de_24_bytes
+curl -fsSL https://raw.githubusercontent.com/Willytecheira/helpdesk/main/agent/uninstall.sh | sudo bash
 ```
 
-## Ejecución
-
-### Cron (cada minuto)
-
-```cron
-* * * * * . /etc/helpdesk-agent.env && /opt/helpdesk-agent/heartbeat.sh >>/var/log/helpdesk-agent.log 2>&1
-```
-
-### systemd timer
-
-`/etc/systemd/system/helpdesk-agent.service`:
-
-```ini
-[Unit]
-Description=Helpdesk agent heartbeat
-After=docker.service
-
-[Service]
-Type=oneshot
-EnvironmentFile=/etc/helpdesk-agent.env
-ExecStart=/opt/helpdesk-agent/heartbeat.sh
-```
-
-`/etc/systemd/system/helpdesk-agent.timer`:
-
-```ini
-[Unit]
-Description=Run helpdesk-agent every minute
-
-[Timer]
-OnBootSec=30s
-OnUnitActiveSec=60s
-Unit=helpdesk-agent.service
-
-[Install]
-WantedBy=timers.target
-```
+## Operación
 
 ```bash
-systemctl daemon-reload
-systemctl enable --now helpdesk-agent.timer
+# Estado del timer
+systemctl status helpdesk-agent.timer
+
+# Forzar un reporte ahora
+systemctl start helpdesk-agent.service
+
+# Ver logs
+journalctl -u helpdesk-agent.service -n 30
 ```
 
-## Datos que reporta
+## Qué reporta
 
 - Métricas del host: CPU%, RAM%, disco% (root), load avg (1/5/15m), uptime
-- Hostname, sistema operativo
-- Versión de Docker
+- Hostname, sistema operativo, versión de Docker
 - Por cada contenedor: nombre, imagen, tag, estado, CPU%, RAM en MB
 
-## Endpoint
+## Notas
 
-`POST {HELPDESK_URL}/api/agent/heartbeat`
-
-```http
-Authorization: Bearer {AGENT_TOKEN}
-Content-Type: application/json
-```
+- El agente corre como root para poder leer el socket de Docker.
+- Si el host no tiene Docker, igual reporta las métricas del servidor (lista de
+  contenedores vacía).
+- El token identifica al servidor. Vive en `/etc/helpdesk-agent.env` con permisos 600.
