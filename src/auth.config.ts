@@ -18,6 +18,7 @@ export const authConfig = {
         path.startsWith("/api/health") ||
         path.startsWith("/api/cron") ||
         path.startsWith("/api/inbound") ||
+        path.startsWith("/api/whatsapp") ||
         path.startsWith("/api/setup")
       ) {
         return true
