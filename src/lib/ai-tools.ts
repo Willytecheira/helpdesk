@@ -348,7 +348,7 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
           priority,
           customerId,
           systemId,
-          createdById: ctx.userId,
+          createdById: ctx.userId || null,
           tags: ["ai-created"],
         },
         select: { id: true, code: true },
@@ -385,7 +385,7 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
     await prisma.ticketComment.create({
       data: {
         ticketId: ticket.id,
-        authorId: ctx.userId,
+        authorId: ctx.userId || null,
         body: `🤖 La IA cambió el estado a **${status.replace("_", " ")}**`,
         source: "AI",
       },
@@ -411,7 +411,7 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
     await prisma.ticketComment.create({
       data: {
         ticketId: ticket.id,
-        authorId: ctx.userId,
+        authorId: ctx.userId || null,
         body,
         isInternal,
         source: "AI",

@@ -9,7 +9,7 @@ import { logActivity } from "@/lib/audit"
 import { agentLogger } from "@/lib/logger"
 import { getEvolutionConfig } from "@/lib/integrations"
 import { jidToNumber, isGroupJid, sendWhatsappText } from "@/lib/evolution"
-import { runAgentReply } from "@/lib/ai/run-agent"
+import { runAgentReply, WHATSAPP_TOOLS } from "@/lib/ai/run-agent"
 import type { AiToolContext } from "@/lib/ai-tools"
 
 export const runtime = "nodejs"
@@ -226,15 +226,16 @@ async function handleIncoming(opts: {
   const extraSystem = [
     "Estás respondiendo a un cliente por WhatsApp.",
     "Respuestas BREVES y en texto plano (sin tablas ni markdown complejo; emojis ok con moderación).",
-    `Este es el ticket ${ticket.code}. Si el problema queda resuelto, decilo claramente.`,
-    "Si no podés resolverlo o requiere intervención humana, avisá que derivás a un agente.",
+    `Este es el ticket ${ticket.code}.`,
+    `Si lograste resolver el problema, marcá el ticket como RESUELTO usando la herramienta update_ticket_status (code="${ticket.code}", status="RESOLVED") y recién después confirmáselo al cliente. No digas que lo resolviste si no llamaste a la herramienta.`,
+    "Si no podés resolverlo o requiere intervención humana, dejá el ticket abierto y avisá que derivás a un agente.",
   ].join(" ")
 
   const reply = await runAgentReply({
     agentId: cfg.agentId,
     ctx,
     messages: history,
-    readOnly: true,
+    toolAllowlist: WHATSAPP_TOOLS,
     extraSystem,
   })
 

@@ -9,14 +9,16 @@ import { buildAgentTools } from "@/lib/ai/agent-tools"
 import type { AiToolContext } from "@/lib/ai-tools"
 import { aiLogger } from "@/lib/logger"
 
-// Tools de sólo lectura: el agente puede consultar pero no mutar datos.
-// (En WhatsApp, la creación/actualización del ticket la maneja el webhook.)
-const READONLY_TOOLS = [
+// Tools permitidas para canales asíncronos (WhatsApp): consultar + resolver/actualizar
+// el ticket. NO incluye create_ticket (lo maneja el webhook → evita duplicados) ni
+// add_ticket_comment (la respuesta del agente ya se guarda como comentario).
+export const WHATSAPP_TOOLS = [
   "search_knowledge_base",
   "get_ticket_by_code",
   "list_recent_tickets",
   "get_customer_overview",
   "get_server_status",
+  "update_ticket_status",
 ]
 
 const MAX_STEPS = 5
@@ -25,7 +27,8 @@ export async function runAgentReply(opts: {
   agentId?: string | null
   ctx: AiToolContext
   messages: ModelMessage[]
-  readOnly?: boolean
+  /** Si se pasa, limita las tools del agente a las de esta lista (intersección con las suyas). */
+  toolAllowlist?: string[]
   extraSystem?: string
 }): Promise<{ text: string; agentName: string; provider: string; model: string } | null> {
   const agent = await resolveAgent(opts.agentId)
@@ -34,10 +37,9 @@ export async function runAgentReply(opts: {
   const model = await getLanguageModel(agent.provider, agent.model)
   if (!model) return null
 
-  const toolNames =
-    opts.readOnly === false
-      ? agent.tools
-      : agent.tools.filter((t) => READONLY_TOOLS.includes(t))
+  const toolNames = opts.toolAllowlist
+    ? agent.tools.filter((t) => opts.toolAllowlist!.includes(t))
+    : agent.tools
   const tools = buildAgentTools(opts.ctx, toolNames)
 
   const system = opts.extraSystem
