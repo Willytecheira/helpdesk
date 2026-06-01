@@ -223,13 +223,41 @@ async function handleIncoming(opts: {
     customerId: ticket.customerId,
   }
 
+  // Contexto del cliente: el agente debe conocer los recursos SIN preguntarle el nombre.
+  const customer = await prisma.customer.findUnique({
+    where: { id: ticket.customerId },
+    select: {
+      name: true,
+      slug: true,
+      servers: { select: { name: true }, orderBy: { name: "asc" } },
+      systems: { select: { name: true }, orderBy: { name: "asc" } },
+    },
+  })
+  const serverNames = customer?.servers.map((s) => s.name) ?? []
+  const systemNames = customer?.systems.map((s) => s.name) ?? []
+
+  const serverGuidance =
+    serverNames.length === 1
+      ? `El cliente tiene UN solo servidor ("${serverNames[0]}"). Cuando hable de "el servidor", usá get_server_status con ese nombre y dale el estado directamente, SIN preguntar cuál.`
+      : serverNames.length > 1
+        ? "El cliente tiene VARIOS servidores. Si no aclaró cuál, ofrecele la lista para que elija; no le pidas el nombre como si no lo supieras."
+        : "El cliente no tiene servidores registrados; si pregunta por uno, avisáselo."
+
   const extraSystem = [
     "Estás respondiendo a un cliente por WhatsApp.",
     "Respuestas BREVES y en texto plano (sin tablas ni markdown complejo; emojis ok con moderación).",
     `Este es el ticket ${ticket.code}.`,
     `Si lograste resolver el problema, marcá el ticket como RESUELTO usando la herramienta update_ticket_status (code="${ticket.code}", status="RESOLVED") y recién después confirmáselo al cliente. No digas que lo resolviste si no llamaste a la herramienta.`,
     "Si no podés resolverlo o requiere intervención humana, dejá el ticket abierto y avisá que derivás a un agente.",
-  ].join(" ")
+    "",
+    "--- Recursos de este cliente (ya los conocés, NO se los preguntes) ---",
+    customer ? `Cliente: ${customer.name} (slug: ${customer.slug}).` : "",
+    `Servidores (${serverNames.length}): ${serverNames.join(", ") || "ninguno"}.`,
+    `Sistemas (${systemNames.length}): ${systemNames.join(", ") || "ninguno"}.`,
+    serverGuidance,
+  ]
+    .filter(Boolean)
+    .join("\n")
 
   const reply = await runAgentReply({
     agentId: cfg.agentId,
