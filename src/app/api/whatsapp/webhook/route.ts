@@ -141,8 +141,6 @@ async function handleIncoming(opts: {
     select: { id: true, code: true, customerId: true },
   })
 
-  let isNew = false
-
   if (ticket) {
     // Anexar el mensaje entrante como comentario
     const comment = await prisma.ticketComment.create({
@@ -199,7 +197,6 @@ async function handleIncoming(opts: {
       })
     })
     ticket = created
-    isNew = true
 
     indexTicket(ticket.id).catch(() => {})
     notifyTicketCreated(ticket.id, null).catch(() => {})
@@ -215,7 +212,7 @@ async function handleIncoming(opts: {
   // 3. Auto-respuesta del agente IA (si está habilitada)
   if (!cfg.autoReply) return
 
-  const history = await buildHistory(ticket.id, isNew ? messageText : null)
+  const history = await buildHistory(ticket.id)
 
   const ctx: AiToolContext = {
     userId: "",
@@ -289,28 +286,44 @@ async function handleIncoming(opts: {
   }
 }
 
-/** Construye el historial de mensajes para el agente desde los comentarios del ticket. */
-async function buildHistory(
-  ticketId: string,
-  seedText: string | null
-): Promise<ModelMessage[]> {
-  if (seedText) {
-    // Ticket recién creado: el mensaje del cliente está en la descripción.
-    return [{ role: "user", content: seedText }]
-  }
-  const comments = await prisma.ticketComment.findMany({
-    where: { ticketId, isInternal: false, source: { in: ["USER", "AI"] } },
-    orderBy: { createdAt: "asc" },
-    take: 20,
-    select: { body: true, source: true },
+/**
+ * Arma la conversación como un ÚNICO mensaje de usuario con el transcript completo.
+ * Evita problemas de alternancia de roles (Anthropic exige empezar por "user" y
+ * alternar) y le da al modelo TODO el hilo, así no se queda en loop ni ignora que
+ * el cliente ya dijo que se solucionó.
+ */
+async function buildHistory(ticketId: string): Promise<ModelMessage[]> {
+  const ticket = await prisma.ticket.findUnique({
+    where: { id: ticketId },
+    select: {
+      description: true,
+      comments: {
+        where: { isInternal: false, source: { in: ["USER", "AI"] } },
+        orderBy: { createdAt: "desc" },
+        take: 30,
+        select: { body: true, source: true },
+      },
+    },
   })
-  const msgs: ModelMessage[] = comments.map((c) => ({
-    role: c.source === "AI" ? "assistant" : "user",
-    content: c.body,
-  }))
-  // Garantizar que la conversación termine en un turno del usuario.
-  if (msgs.length === 0 || msgs[msgs.length - 1].role !== "user") {
-    return msgs.length ? msgs : [{ role: "user", content: "Hola" }]
+
+  const lines: string[] = []
+  if (ticket) {
+    // El primer mensaje del cliente quedó en la descripción del ticket.
+    const firstMsg = ticket.description.split("\n\n— Recibido")[0].trim()
+    if (firstMsg) lines.push(`Cliente: ${firstMsg}`)
+    for (const c of [...ticket.comments].reverse()) {
+      if (c.source === "AI" && c.body.startsWith("🤖")) continue // notas de cambio de estado
+      lines.push(`${c.source === "AI" ? "Agente" : "Cliente"}: ${c.body}`)
+    }
   }
-  return msgs
+
+  const transcript =
+    "Conversación con el cliente por WhatsApp hasta ahora:\n\n" +
+    (lines.join("\n") || "Cliente: Hola") +
+    "\n\nRespondé SOLO al último mensaje del cliente, teniendo en cuenta todo el hilo. " +
+    "No repitas pasos que el cliente ya hizo. Si el cliente indica que el problema se solucionó " +
+    "(p. ej. 'ya funciona', 'se arregló', 'gracias'), confirmá brevemente y marcá el ticket como " +
+    "RESUELTO con la herramienta update_ticket_status."
+
+  return [{ role: "user", content: transcript }]
 }
